@@ -308,30 +308,45 @@ class InstallPluginCommand extends EnvironmentAwareCommand {
     private Path download(Terminal terminal, String pluginId, Path tmpDir, boolean isBatch) throws Exception {
 
         if (OFFICIAL_PLUGINS.contains(pluginId)) {
+            // 若插件是官方插件，这调用getOpenSearchUrl获取插件地址
             final String url = getOpenSearchUrl(terminal, Version.CURRENT, isSnapshot(), pluginId, Platforms.PLATFORM_NAME);
+            // 在终端显示下载进度，插件id，下载与opensearch
             terminal.println("-> Downloading " + pluginId + " from opensearch");
+            // 调用downloadAndValidate下载插件
             return downloadAndValidate(terminal, url, tmpDir, true, isBatch);
         }
 
         // now try as maven coordinates, a valid URL would only have a colon and slash
+        // maven 坐标下载
         String[] coordinates = pluginId.split(":");
         if (coordinates.length == 3 && pluginId.contains("/") == false && pluginId.startsWith("file:") == false) {
+            /*
+             *  调用getMavenUrl方法生成Maven中央仓库的插件下载URL。
+             * 它传入终端对象、坐标数组和平台名称，构建标准的Maven仓库URL格式，用于从Maven中央仓库下载OpenSearch插件
+             * */
             String mavenUrl = getMavenUrl(terminal, coordinates, Platforms.PLATFORM_NAME);
             terminal.println("-> Downloading " + pluginId + " from maven central");
             return downloadAndValidate(terminal, mavenUrl, tmpDir, false, isBatch);
         }
 
         // fall back to plain old URL
+        // 检查插件是否包含冒号，如果不包含则认为是插件名称
         if (pluginId.contains(":") == false) {
             // definitely not a valid url, so assume it is a plugin name
+            // 调用checkMisspelledPlugin寻找相似的官方插件名称
             List<String> plugins = checkMisspelledPlugin(pluginId);
+            // 构建错误消息并抛出异常
             String msg = "Unknown plugin " + pluginId;
             if (plugins.isEmpty() == false) {
                 msg += ", did you mean " + (plugins.size() == 1 ? "[" + plugins.get(0) + "]" : "any of " + plugins.toString()) + "?";
             }
             throw new UserException(ExitCodes.USAGE, msg);
         }
+        /* 这行代码的功能是：在终端上打印下载提示信息，显示正在下载的插件URL。
+         * URLDecoder.decode()方法将URL编码的字符串解码为原始字符，确保特殊字符正确显示
+         * */
         terminal.println("-> Downloading " + URLDecoder.decode(pluginId, "UTF-8"));
+        // 调用downloadZip下载插件
         return downloadZip(terminal, pluginId, tmpDir, isBatch);
     }
 
@@ -378,15 +393,20 @@ class InstallPluginCommand extends EnvironmentAwareCommand {
     }
 
     /** Returns the url for an opensearch plugin in maven. */
+    // 根据坐标获取maven仓库的插件下载URL
     private String getMavenUrl(Terminal terminal, String[] coordinates, String platform) throws IOException {
+        // 解析坐标数组获取groupId、artifactId和version
         final String groupId = coordinates[0].replace(".", "/");
         final String artifactId = coordinates[1];
         final String version = coordinates[2];
+        // 然后构造基础URL
         final String baseUrl = String.format(Locale.ROOT, "https://repo1.maven.org/maven2/%s/%s/%s", groupId, artifactId, version);
+        // 尝试构建特定平台的ZIP文件URL，如果该URL存在则返回，否则返回通用版本的ZIP文件URL
         final String platformUrl = String.format(Locale.ROOT, "%s/%s-%s-%s.zip", baseUrl, artifactId, platform, version);
         if (urlExists(terminal, platformUrl)) {
             return platformUrl;
         }
+        // 返回通用版本的ZIP文件URL
         return String.format(Locale.ROOT, "%s/%s-%s.zip", baseUrl, artifactId, version);
     }
 

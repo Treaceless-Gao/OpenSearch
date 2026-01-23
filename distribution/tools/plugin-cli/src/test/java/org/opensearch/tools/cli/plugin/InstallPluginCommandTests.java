@@ -231,14 +231,18 @@ public class InstallPluginCommandTests extends OpenSearchTestCase {
 
     /** Creates a test environment with bin, config and plugins directories. */
     static Tuple<Path, Environment> createEnv(FileSystem fs, Function<String, Path> temp) throws IOException {
+        // 使用临时路径生成器创建home目录
         Path home = temp.apply("install-plugin-command-tests");
+        // 在home目录下创建bin、config、plugins子目录及必要文件
         Files.createDirectories(home.resolve("bin"));
         Files.createFile(home.resolve("bin").resolve("opensearch"));
         Files.createDirectories(home.resolve("config"));
         Files.createFile(home.resolve("config").resolve("opensearch.yml"));
         Path plugins = Files.createDirectories(home.resolve("plugins"));
         assertTrue(Files.exists(plugins));
+        // 构建包含path.home设置的Settings对象
         Settings settings = Settings.builder().put("path.home", home).build();
+        // 返回包含home路径和TestEnvironment实例的Tuple元组
         return Tuple.tuple(home, TestEnvironment.newEnvironment(settings));
     }
 
@@ -1139,6 +1143,8 @@ public class InstallPluginCommandTests extends OpenSearchTestCase {
         assertInstallPluginFromUrl("analysis-icu", "analysis-icu", url, false);
     }
 
+
+    // maven测试方法
     public void testMavenPlugin() throws Exception {
         String url = "https://repo1.maven.org/maven2/mygroup/myplugin/1.0.0/myplugin-1.0.0.zip";
         assertInstallPluginFromUrl("mygroup:myplugin:1.0.0", "myplugin", url, false);
