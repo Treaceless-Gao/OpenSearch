@@ -166,7 +166,8 @@ class InstallPluginCommand extends EnvironmentAwareCommand {
     }
 
     /** The official plugins that can be installed simply by name. */
-    static final Set<String> OFFICIAL_PLUGINS;
+    static final Set<String> OFFICIAL_PLUGINS = Collections.emptySet();
+    /*static final Set<String> OFFICIAL_PLUGINS;
     static {
         try (
             InputStream stream = InstallPluginCommand.class.getResourceAsStream("/plugins.txt");
@@ -182,7 +183,7 @@ class InstallPluginCommand extends EnvironmentAwareCommand {
         } catch (IOException e) {
             throw new RuntimeException(e);
         }
-    }
+    }*/
 
     private final OptionSpec<Void> batchOption;
     private final OptionSpec<String> arguments;
@@ -237,11 +238,11 @@ class InstallPluginCommand extends EnvironmentAwareCommand {
         terminal.println("");
 
         // List official opensearch plugin names
-        terminal.println("The following official plugins may be installed by name:");
+        /*terminal.println("The following official plugins may be installed by name:");
         for (String plugin : OFFICIAL_PLUGINS) {
             terminal.println("  " + plugin);
         }
-        terminal.println("");
+        terminal.println("");*/
     }
 
     @Override
@@ -334,12 +335,13 @@ class InstallPluginCommand extends EnvironmentAwareCommand {
         if (pluginId.contains(":") == false) {
             // definitely not a valid url, so assume it is a plugin name
             // 调用checkMisspelledPlugin寻找相似的官方插件名称
-            List<String> plugins = checkMisspelledPlugin(pluginId);
+            String msg = "Unknown plugin " + pluginId + ". No official plugins available in this build.";
+//            List<String> plugins = checkMisspelledPlugin(pluginId);
             // 构建错误消息并抛出异常
-            String msg = "Unknown plugin " + pluginId;
-            if (plugins.isEmpty() == false) {
-                msg += ", did you mean " + (plugins.size() == 1 ? "[" + plugins.get(0) + "]" : "any of " + plugins.toString()) + "?";
-            }
+//            String msg = "Unknown plugin " + pluginId;
+//            if (plugins.isEmpty() == false) {
+//                msg += ", did you mean " + (plugins.size() == 1 ? "[" + plugins.get(0) + "]" : "any of " + plugins.toString()) + "?";
+//            }
             throw new UserException(ExitCodes.USAGE, msg);
         }
         /* 这行代码的功能是：在终端上打印下载提示信息，显示正在下载的插件URL。
