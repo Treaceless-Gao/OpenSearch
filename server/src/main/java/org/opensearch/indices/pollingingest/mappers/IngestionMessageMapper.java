@@ -8,7 +8,7 @@
 
 package org.opensearch.indices.pollingingest.mappers;
 
-import org.opensearch.common.annotation.ExperimentalApi;
+import org.opensearch.common.annotation.PublicApi;
 import org.opensearch.index.IngestionShardPointer;
 import org.opensearch.index.Message;
 import org.opensearch.indices.pollingingest.ShardUpdateMessage;
@@ -37,10 +37,11 @@ public interface IngestionMessageMapper {
     /**
      * Enum representing different mapper types.
      */
-    @ExperimentalApi
+    @PublicApi(since = "3.6.0")
     enum MapperType {
         DEFAULT("default"),
-        RAW_PAYLOAD("raw_payload");
+        RAW_PAYLOAD("raw_payload"),
+        FIELD_MAPPING("field_mapping");
 
         private final String name;
 
@@ -59,7 +60,11 @@ public interface IngestionMessageMapper {
                 }
             }
             throw new IllegalArgumentException(
-                String.format(Locale.ROOT, "Unknown ingestion mapper type: %s. Valid values are: default, raw_payload", value)
+                String.format(
+                    Locale.ROOT,
+                    "Unknown ingestion mapper type: %s. Valid values are: default, raw_payload, field_mapping",
+                    value
+                )
             );
         }
     }

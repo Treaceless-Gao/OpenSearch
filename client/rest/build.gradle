@@ -71,7 +71,7 @@ dependencies {
   testImplementation "org.apache.logging.log4j:log4j-api:${versions.log4j}"
   testImplementation "org.apache.logging.log4j:log4j-core:${versions.log4j}"
   testImplementation "org.apache.logging.log4j:log4j-jul:${versions.log4j}"
-  testImplementation "org.apache.logging.log4j:log4j-slf4j-impl:${versions.log4j}"
+  testImplementation "org.apache.logging.log4j:log4j-slf4j2-impl:${versions.log4j}"
 }
 
 tasks.named("dependencyLicenses").configure {
@@ -149,7 +149,16 @@ thirdPartyAudit {
       'io.micrometer.core.instrument.composite.CompositeMeterRegistry',
       'io.micrometer.core.instrument.search.Search',
       'reactor.blockhound.BlockHound$Builder',
-      'reactor.blockhound.integration.BlockHoundIntegration'
+      'reactor.blockhound.integration.BlockHoundIntegration',
+      //optional compression
+      'com.aayushatharva.brotli4j.decoder.DecoderJNI$Status',
+      'com.aayushatharva.brotli4j.decoder.DecoderJNI$Wrapper',
+      'com.aayushatharva.brotli4j.encoder.Encoder$Mode',
+      'com.aayushatharva.brotli4j.encoder.EncoderJNI$Operation',
+      'com.aayushatharva.brotli4j.encoder.EncoderJNI$Wrapper',
+      'com.github.luben.zstd.ZstdDecompressCtx',
+      'com.github.luben.zstd.ZstdDirectBufferCompressingStream',
+      'org.apache.commons.compress.compressors.CompressorStreamFactory'
    )
    ignoreViolations(
       'reactor.core.publisher.CallSiteSupplierFactory$SharedSecretsCallSiteSupplierFactory',
