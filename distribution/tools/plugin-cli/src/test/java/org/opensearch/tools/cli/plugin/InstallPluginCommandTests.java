@@ -1006,6 +1006,9 @@ public class InstallPluginCommandTests extends OpenSearchTestCase {
         skipJarHellCommand.execute(terminal, Collections.singletonList(pluginZip), isBatch, env.v2());
     }
 
+    /**
+     * 测试从URL安装插件。通过重写InstallPluginCommand的各种方法来模拟网络请求和文件操作，从而测试插件安装的完整流程
+     * */
     void assertInstallPluginFromUrl(
         final String pluginId,
         final String name,
@@ -1016,100 +1019,152 @@ public class InstallPluginCommandTests extends OpenSearchTestCase {
         final PGPSecretKey secretKey,
         final BiFunction<byte[], PGPSecretKey, String> signature
     ) throws Exception {
+        // 创建环境和临时目录
         Tuple<Path, Environment> env = createEnv(fs, temp);
+        // 创建插件目录
         Path pluginDir = createPluginDir(temp);
+        // 创建插件ZIP文件
         Path pluginZip = createPlugin(name, pluginDir);
+        // 创建InstallPluginCommand匿名内部类实例
         InstallPluginCommand command = new InstallPluginCommand() {
             @Override
             Path downloadZip(Terminal terminal, String urlString, Path tmpDir, boolean isBatch) throws IOException {
+                // 验证URL匹配
                 assertEquals(url, urlString);
+                // 创建下载路径
                 Path downloadedPath = tmpDir.resolve("downloaded.zip");
+                // 复制本地插件文件到下载路径
                 Files.copy(pluginZip, downloadedPath);
+                // 返回下载文件路径
                 return downloadedPath;
             }
 
+            // 重写openUrl方法，处理SHA校验和签名文件请求
             @Override
             URL openUrl(String urlString) throws IOException {
+                // 如果是SHA校验文件请求
                 if ((url + shaExtension).equals(urlString)) {
                     // calc sha an return file URL to it
+                    // 计算SHA校验和并返回文件URL
                     Path shaFile = temp.apply("shas").resolve("downloaded.zip" + shaExtension);
+                    // 读取插件ZIP内容
                     byte[] zipbytes = Files.readAllBytes(pluginZip);
+                    // 计算SHA校验和
                     String checksum = shaCalculator.apply(zipbytes);
+                    // 写入校验和文件
                     Files.write(shaFile, checksum.getBytes(StandardCharsets.UTF_8));
+                    // 返回校验和文件URL
                     return shaFile.toUri().toURL();
-                } else if ((url + ".sig").equals(urlString)) {
+                } else if ((url + ".sig").equals(urlString)) { // 如果是签名文件请求
+
                     final Path ascFile = temp.apply("sig").resolve("downloaded.zip" + ".sig");
+                    // 读取插件ZIP内容
                     final byte[] zipBytes = Files.readAllBytes(pluginZip);
+                    // 生成PGP签名
                     final String asc = signature.apply(zipBytes, secretKey);
+                    // 写入签名文件
                     Files.write(ascFile, asc.getBytes(StandardCharsets.UTF_8));
+                    // 返回签名文件URL
                     return ascFile.toUri().toURL();
                 }
+                // 其他URL返回null
                 return null;
             }
 
+            // 重写verifySignature方法，验证插件签名
             @Override
             void verifySignature(Path zip, String urlString) throws IOException, PGPException {
                 if (InstallPluginCommand.OFFICIAL_PLUGINS.contains(name)) {
+                    // 官方插件调用父类验证
                     super.verifySignature(zip, urlString);
                 } else {
+                    // 非官方插件抛出异常
                     throw new UnsupportedOperationException("verify signature should not be called for unofficial plugins");
                 }
             }
 
+            // 重写pluginZipInputStream方法，提供ZIP输入流
             @Override
             InputStream pluginZipInputStream(Path zip) throws IOException {
+                // 返回ZIP文件的字节数组输入流
                 return new ByteArrayInputStream(Files.readAllBytes(zip));
             }
 
+            // 重写getPublicKeyId方法，获取公钥ID
             @Override
             String getPublicKeyId() {
+                // 返回大写的十六进制公钥ID
                 return Long.toHexString(secretKey.getKeyID()).toUpperCase(Locale.ROOT);
             }
 
+            // 重写getPublicKey方法，获取公钥数据
             @Override
             InputStream getPublicKey() {
                 try {
+                    // 创建输出流
                     final ByteArrayOutputStream output = new ByteArrayOutputStream();
+                    // 创建ASCII装甲输出流
                     final ArmoredOutputStream armored = new ArmoredOutputStream(output);
+                    // 编码公钥
                     secretKey.getPublicKey().encode(armored);
+                    // 关闭装甲流
                     armored.close();
+                    // 返回公钥输入流
                     return new ByteArrayInputStream(output.toByteArray());
                 } catch (final IOException e) {
+                    // 捕获IO异常并转换为断言错误
                     throw new AssertionError(e);
                 }
             }
 
+            // 重写urlExists方法，检查URL是否存在
             @Override
             boolean urlExists(Terminal terminal, String urlString) throws IOException {
+                // 简单比较URL字符串是否相等
                 return urlString.equals(url);
             }
 
+            // 重写isSnapshot方法，返回快照状态
             @Override
             boolean isSnapshot() {
+                // 返回传入的快照标志
                 return isSnapshot;
             }
 
+            // 重写jarHellCheck方法，跳过JAR冲突检查
             @Override
             void jarHellCheck(PluginInfo candidateInfo, Path candidate, Path pluginsDir, Path modulesDir) throws Exception {
-                // no jarhell check
+                // no jarhell check  不执行JAR地狱检查
             }
         };
+        // 执行插件安装
         installPlugin(pluginId, env.v1(), command);
+        //验证插件安装结果
         assertPlugin(name, pluginDir, env.v2());
     }
 
+    /**
+     * 方法签名定义
+     * 1、自动创建SHA-512摘要处理器
+     * 2、设置默认的SHA512校验文件扩展名
+     * 3、通过方法引用传递签名功能
+     * 4、简化了测试调用，隐藏了底层实现细节
+     * 测试代码只需要提供基本的插件信息，而不需要关心具体的校验和计算和签名机制。
+     * */
     public void assertInstallPluginFromUrl(final String pluginId, final String name, final String url, boolean isSnapshot)
         throws Exception {
+        // 创建SHA-512消息摘要实例
         final MessageDigest digest = MessageDigest.getInstance("SHA-512");
+        // 调用重载版本的assertInstallPluginFromUrl方法
         assertInstallPluginFromUrl(
-            pluginId,
-            name,
-            url,
-            isSnapshot,
-            ".sha512",
-            checksumAndFilename(digest, url),
-            newSecretKey(),
-            this::signature
+            pluginId,              // 传递插件ID
+            name,                  // 传递插件名称
+            url,                   // 传递下载URL
+            isSnapshot,            // 传递快照标志
+            ".sha512",             // 指定SHA512校验文件扩展名
+            checksumAndFilename(digest, url),  // 生成校验和计算函数
+            newSecretKey(),        // 生成新的PGP私钥
+            this::signature        // 传递签名方法引用
         );
     }
 
