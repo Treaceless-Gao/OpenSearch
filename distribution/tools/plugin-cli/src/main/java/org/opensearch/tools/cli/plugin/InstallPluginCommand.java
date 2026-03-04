@@ -253,53 +253,70 @@ class InstallPluginCommand extends EnvironmentAwareCommand {
     }
 
     // pkg private for testing
+
+    /**
+     * @param terminal
+     * @param pluginIds 要安装的插件 ID 列表（可以是多个）
+     * @param isBatch   是否批处理模式 （无交互）
+     * @param env       环境配置对象，包含临时目录和插件目录路径
+     * @throws Exception
+     */
     void execute(Terminal terminal, List<String> pluginIds, boolean isBatch, Environment env) throws Exception {
         if (pluginIds.isEmpty()) {
             throw new UserException(ExitCodes.USAGE, "at least one plugin id is required");
         }
-
-        final Set<String> uniquePluginIds = new HashSet<>();
-        for (final String pluginId : pluginIds) {
-            if (uniquePluginIds.add(pluginId) == false) {
+        // 防止重复安装同一个插件造成资源浪费和潜在冲突。
+        final Set<String> uniquePluginIds = new HashSet<>(); // 用于存储唯一id
+        for (final String pluginId : pluginIds) { // 遍历所有传入的插件id
+            if (uniquePluginIds.add(pluginId) == false) { // 将插件id添加到集合中，如果返回false则说明该插件id已经存在，则抛出异常
                 throw new UserException(ExitCodes.USAGE, "duplicate plugin id [" + pluginId + "]");
             }
         }
-
-        final Map<String, List<Path>> deleteOnFailures = new LinkedHashMap<>();
+        // key 为插件id，value 为该插件id对应的删除列表 如果安装失败，需要清理所有已创建的文件
+        final Map<String, List<Path>> deleteOnFailures = new LinkedHashMap<>(); // 使用 LinkedHashMap 保持插入顺序
         for (final String pluginId : pluginIds) {
-            terminal.println("-> Installing " + pluginId);
+            terminal.println("-> Installing " + pluginId);  // 输出正在安装的插件id 输出安装开始信息
             try {
-                final List<Path> deleteOnFailure = new ArrayList<>();
-                deleteOnFailures.put(pluginId, deleteOnFailure);
+                final List<Path> deleteOnFailure = new ArrayList<>(); // 初始化当前插件的回滚列表 为当前插件创建一个空的路径列表，用于记录安装过程中创建的所有文件。
+                deleteOnFailures.put(pluginId, deleteOnFailure);    // 立即将解压后的路径加入回滚列表，如果后续失败需要删除这个目录。
 
-                final Path pluginZip = download(terminal, pluginId, env.tmpDir(), isBatch);
-                final Path extractedZip = unzip(pluginZip, env.pluginsDir());
-                deleteOnFailure.add(extractedZip);
+                final Path pluginZip = download(terminal, pluginId, env.tmpDir(), isBatch); // 从网络或本地下载插件包到临时目录。
+                final Path extractedZip = unzip(pluginZip, env.pluginsDir());  // 将下载的 ZIP 文件解压到插件目录。
+                deleteOnFailure.add(extractedZip); // 将解压后的路径加入回滚列表，如果后续失败需要删除这个目录。
                 final PluginInfo pluginInfo = installPlugin(terminal, isBatch, extractedZip, env, deleteOnFailure);
                 terminal.println("-> Installed " + pluginInfo.getName() + " with folder name " + pluginInfo.getTargetFolderName());
                 // swap the entry by plugin id for one with the installed plugin name, it gives a cleaner error message for URL installs
-                deleteOnFailures.remove(pluginId);
-                deleteOnFailures.put(pluginInfo.getName(), deleteOnFailure);
+                deleteOnFailures.remove(pluginId); // 删除之前添加的插件id
+                deleteOnFailures.put(pluginInfo.getName(), deleteOnFailure); // 安装成功后知道了插件的实际的插件名称，替换为实际的插件名称，便于错误消息显示
             } catch (final Exception installProblem) {
-                terminal.println("-> Failed installing " + pluginId);
+                terminal.println("-> Failed installing " + pluginId); // 安装失败，输出安装失败信息
+                // 遍历回滚映射中的每个条目
+                // 包括当前失败的插件和之前成功安装的其他插件
                 for (final Map.Entry<String, List<Path>> deleteOnFailureEntry : deleteOnFailures.entrySet()) {
                     terminal.println("-> Rolling back " + deleteOnFailureEntry.getKey());
+                    // 初始化成功标志为 false
                     boolean success = false;
                     try {
+                        // 调用工具方法删除所有记录的文件和目录；转换为数组是因为 rm() 方法接受可变参数
                         IOUtils.rm(deleteOnFailureEntry.getValue().toArray(new Path[0]));
+                        // 如果删除成功，设置标志为 true
                         success = true;
-                    } catch (final IOException exceptionWhileRemovingFiles) {
+                    } catch (final IOException exceptionWhileRemovingFiles) { // 创建新的异常，说明回滚哪个插件失败了
                         final Exception exception = new Exception(
                             "failed rolling back installation of [" + deleteOnFailureEntry.getKey() + "]",
                             exceptionWhileRemovingFiles
                         );
+                        // 将回滚的异常作为被抑制的异常附加到原异常上；这样不会丢失原始错误信息，同时记录回滚问题
                         installProblem.addSuppressed(exception);
+                        // 输出回滚失败信息
                         terminal.println("-> Failed rolling back " + deleteOnFailureEntry.getKey());
                     }
+                    // 回滚成功，输出确认信息
                     if (success) {
                         terminal.println("-> Rolled back " + deleteOnFailureEntry.getKey());
                     }
                 }
+                // 抛出原始异常，即安装时候的异常，确保调用者知道安装失败了
                 throw installProblem;
             }
         }
@@ -446,21 +463,34 @@ class InstallPluginCommand extends EnvironmentAwareCommand {
 
     /** Downloads a zip from the url, into a temp file under the given temp dir. */
     // pkg private for tests
-    @SuppressForbidden(reason = "We use getInputStream to download plugins")
+    // 这是一个下载ZIP文件的方法，支持进度显示和批处理两种模式，主要用于OpenSearch插件的在线安装功能
+    @SuppressForbidden(reason = "We use getInputStream to download plugins") // 抑制安全检查警告
     Path downloadZip(Terminal terminal, String urlString, Path tmpDir, boolean isBatch) throws IOException {
+        // 打印提示信息
         terminal.println(VERBOSE, "Retrieving zip from " + urlString);
+        // 将传入的URL字符串转换为URL对象
         URL url = URI.create(urlString).toURL();
+        // 创建一个临时文件，用于保存下载的zip文件
         Path zip = Files.createTempFile(tmpDir, null, ".zip");
+        // 建立到目标URL的连接，创建URLConnection对象用于网络通信。
         URLConnection urlConnection = url.openConnection();
+        // 设置HTTP请求头中的User-Agent字段，标识自己是OpenSearch插件安装器，这有助于服务器识别客户端身份
         urlConnection.addRequestProperty("User-Agent", "opensearch-plugin-installer");
         try (
+            // 如果是批处理模式(isBatch=true)：直接使用原始的getInputStream()
+            // 如果不是批处理模式：包装成TerminalProgressInputStream，用于显示下载进度
+            // getContentLength()获取文件总大小用于进度计算
             InputStream in = isBatch
                 ? urlConnection.getInputStream()
                 : new TerminalProgressInputStream(urlConnection.getInputStream(), urlConnection.getContentLength(), terminal)
         ) {
             // must overwrite since creating the temp file above actually created the file
+            // 复制数据到临时文件
+            // 必须使用覆盖选项，因为之前创建临时文件时实际已经创建了空文件
+            // StandardCopyOption.REPLACE_EXISTING表示如果目标文件已存在，则覆盖它
             Files.copy(in, zip, StandardCopyOption.REPLACE_EXISTING);
         }
+        // 返回创建的zip文件路径
         return zip;
     }
 

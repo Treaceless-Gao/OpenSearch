@@ -1007,7 +1007,9 @@ public class InstallPluginCommandTests extends OpenSearchTestCase {
     }
 
     /**
-     * 测试从URL安装插件。通过重写InstallPluginCommand的各种方法来模拟网络请求和文件操作，从而测试插件安装的完整流程
+     * 测试从URL安装插件。
+     * 通过重写InstallPluginCommand的各种方法来模拟网络请求和文件操作，
+     * 从而测试插件安装的完整流程
      * */
     void assertInstallPluginFromUrl(
         final String pluginId,
@@ -1206,7 +1208,9 @@ public class InstallPluginCommandTests extends OpenSearchTestCase {
     }
 
     public void testMavenPlatformPlugin() throws Exception {
-        String url = "https://repo1.maven.org/maven2/mygroup/myplugin/1.0.0/myplugin-" + Platforms.PLATFORM_NAME + "-1.0.0.zip";
+//        String url = "https://repo1.maven.org/maven2/mygroup/myplugin/1.0.0/myplugin-" + Platforms.PLATFORM_NAME + "-1.0.0.zip";
+        String platformSuffix = Platforms.PLATFORM_NAME != null ? "-" + Platforms.PLATFORM_NAME : "";
+        String url = "http://nexus.unvdb.com/repository/maven-public/mygroup/myplugin/1.0.0/myplugin-" + platformSuffix + "-1.0.0.zip";
         assertInstallPluginFromUrl("mygroup:myplugin:1.0.0", "myplugin", url, false);
     }
 
