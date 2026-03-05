@@ -356,12 +356,15 @@ public class InstallPluginCommandTests extends OpenSearchTestCase {
         installPlugins(pluginUrls, home, skipJarHellCommand);
     }
 
+    // 安装单个插件。它将 pluginUrl 转为列表（null 则为空列表），连同 home 和 command 传给 installPlugins 执行安装，简化测试调用。
     void installPlugin(String pluginUrl, Path home, InstallPluginCommand command) throws Exception {
         installPlugins(pluginUrl == null ? Collections.emptyList() : Collections.singletonList(pluginUrl), home, command);
     }
 
     void installPlugins(final List<String> pluginUrls, final Path home, final InstallPluginCommand command) throws Exception {
+        // 构建指定 home 路径的 Settings 对象，并创建测试 Environment 环境。
         final Environment env = TestEnvironment.newEnvironment(Settings.builder().put("path.home", home).build());
+        // 调用命令的 execute 方法，传入模拟终端、插件 URL 列表及环境对象，执行安装逻辑
         command.execute(terminal, pluginUrls, false, env);
     }
 
@@ -1269,9 +1272,11 @@ public class InstallPluginCommandTests extends OpenSearchTestCase {
 
     public void testInvalidShaFileMissingFilename() throws Exception {
         String url = "https://artifacts.opensearch.org/releases/plugins/analysis-icu/"
-            + Build.CURRENT.getQualifiedVersion()
+//            + Build.CURRENT.getQualifiedVersion()
+            + Version.CURRENT
             + "/analysis-icu-"
-            + Build.CURRENT.getQualifiedVersion()
+//            + Build.CURRENT.getQualifiedVersion()
+            + Version.CURRENT
             + ".zip";
         MessageDigest digest = MessageDigest.getInstance("SHA-512");
         UserException e = expectThrows(

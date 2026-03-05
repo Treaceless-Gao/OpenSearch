@@ -535,6 +535,7 @@ class InstallPluginCommand extends EnvironmentAwareCommand {
 
     /**
      * Downloads a ZIP from the URL. This method also validates the downloaded plugin ZIP via the following means:
+     * 下载并验证插件的完整性和真实性
      * <ul>
      * <li>
      * For an official plugin we download the SHA-512 checksum and validate the integrity of the downloaded ZIP. We also download the
@@ -548,9 +549,9 @@ class InstallPluginCommand extends EnvironmentAwareCommand {
      *
      * @param terminal       a terminal to log messages to
      * @param urlString      the URL of the plugin ZIP
-     * @param tmpDir         a temporary directory to write downloaded files to
-     * @param officialPlugin true if the plugin is an official plugin
-     * @param isBatch        true if the install is running in batch mode
+     * @param tmpDir         a temporary directory to write downloaded files to 临时目录路径
+     * @param officialPlugin true if the plugin is an official plugin  是否为官方插件 (决定是否需要 PGP 签名验证)
+     * @param isBatch        true if the install is running in batch mode 是否批处理模式(无交互)
      * @return the path to the downloaded plugin ZIP
      * @throws IOException   if an I/O exception occurs download or reading files and resources
      * @throws PGPException  if an exception occurs verifying the downloaded ZIP signature
@@ -563,50 +564,80 @@ class InstallPluginCommand extends EnvironmentAwareCommand {
         final boolean officialPlugin,
         boolean isBatch
     ) throws IOException, PGPException, UserException {
+        // 步骤 1:  下载插件 ZIP 文件
         Path zip = downloadZip(terminal, urlString, tmpDir, isBatch);
+        // 注册到关闭清理列表，目的是确保临时文件最终被清理，即使程序崩溃也能清理，避免磁盘空间被耗尽
         pathsToDeleteOnShutdown.add(zip);
-        String checksumUrlString = urlString + ".sha512";
-        URL checksumUrl = openUrl(checksumUrlString);
-        String digestAlgo = "SHA-512";
+        // 步骤 2: 获取并验证 SHA 校验和
+        // 2.1 尝试获取 SHA-512 校验和文件
+        String checksumUrlString = urlString + ".sha512"; // 在原始 URL 后追加 .sha512
+        URL checksumUrl = openUrl(checksumUrlString); // 打开 URL 连接
+        String digestAlgo = "SHA-512";  // 默认使用 SHA-512 算法
         if (checksumUrl == null && officialPlugin == false) {
-            // fallback to sha1, until 7.0, but with warning
+            // fallback to sha1, until 7.0, but with warning 降级到 SHA-1（兼容旧版本插件，7.0 后将移除此功能）
             terminal.println(
                 "Warning: sha512 not found, falling back to sha1. This behavior is deprecated and will be removed in a "
                     + "future release. Please update the plugin to use a sha512 checksum."
             );
-            checksumUrlString = urlString + ".sha1";
+            checksumUrlString = urlString + ".sha1";    // 改用 .sha1 扩展名
             checksumUrl = openUrl(checksumUrlString);
-            digestAlgo = "SHA-1";
+            digestAlgo = "SHA-1";        // 切换为 SHA-1 算法
         }
+        // 2.3 校验和文件必须存在
         if (checksumUrl == null) {
+            // 如果连 SHA-1 都没有，抛出错误
             throw new UserException(ExitCodes.IO_ERROR, "Plugin checksum missing: " + checksumUrlString);
         }
-        final String expectedChecksum;
-        try (InputStream in = urlOpenStream(checksumUrl)) {
+
+        // 步骤 3: 读取校验和文件内容
+        final String expectedChecksum; // 预期的哈希值
+        try (InputStream in = urlOpenStream(checksumUrl)) { // 自动关闭输入流
             /*
+             *   支持的校验和文件格式：
+             *
+             * SHA-1 格式：
+             *   单行文件，仅包含 SHA-1 哈希值（40 个十六进制字符）
+             *   示例：a94a8fe5ccb19ba61c4c0873d391e987982fbbd3
+             *
+             * SHA-512 格式：
+             *   单行文件，包含 SHA-512 哈希值和文件名，用两个空格分隔
+             *   示例：9b71d224bd62f3785d96d46ad3ea3d73319bfbc2890caadae2dff72519673ca...  plugin.zip
+             *
+             * 验证规则：
+             * - SHA-1: 验证哈希值匹配，且文件只有一行
+             * - SHA-512: 验证哈希值和文件名匹配，且文件只有一行
              * The supported format of the SHA-1 files is a single-line file containing the SHA-1. The supported format of the SHA-512 files
              * is a single-line file containing the SHA-512 and the filename, separated by two spaces. For SHA-1, we verify that the hash
              * matches, and that the file contains a single line. For SHA-512, we verify that the hash and the filename match, and that the
              * file contains a single line.
              */
             if (digestAlgo.equals("SHA-1")) {
+                // 处理 SHA-1 格式
                 final BufferedReader checksumReader = new BufferedReader(new InputStreamReader(in, StandardCharsets.UTF_8));
                 expectedChecksum = checksumReader.readLine();
+                // 验证文件只有一行
                 if (checksumReader.readLine() != null) {
                     throw new UserException(ExitCodes.IO_ERROR, "Invalid checksum file at " + checksumUrl);
                 }
             } else {
+                // 处理 SHA-512 格式
                 final BufferedReader checksumReader = new BufferedReader(new InputStreamReader(in, StandardCharsets.UTF_8));
                 final String checksumLine = checksumReader.readLine();
+                // 按两个空格分割（标准格式）
                 final String[] fields = checksumLine.split(" {2}");
+                // 验证字段数量
+                // 官方插件必须有 2 个字段（哈希 + 文件名），非官方插件可以有 1-2 个字段
                 if (officialPlugin && fields.length != 2 || officialPlugin == false && fields.length > 2) {
                     throw new UserException(ExitCodes.IO_ERROR, "Invalid checksum file at " + checksumUrl);
                 }
+                // 提取哈希值（第一个字段）
                 expectedChecksum = fields[0];
+                // 如果有文件名（第二个字段），验证文件名匹配
                 if (fields.length == 2) {
-                    // checksum line contains filename as well
+                    // checksum line contains filename as well 从 URL 中提取期望的文件名
                     final String[] segments = URI.create(urlString).getPath().split("/");
                     final String expectedFile = segments[segments.length - 1];
+                    // 验证校验和文件中的文件名与实际文件名一致
                     if (fields[1].equals(expectedFile) == false) {
                         final String message = String.format(
                             Locale.ROOT,
@@ -618,23 +649,28 @@ class InstallPluginCommand extends EnvironmentAwareCommand {
                         throw new UserException(ExitCodes.IO_ERROR, message);
                     }
                 }
+                // 验证文件只有一行
                 if (checksumReader.readLine() != null) {
                     throw new UserException(ExitCodes.IO_ERROR, "Invalid checksum file at " + checksumUrl);
                 }
             }
         }
-
-        // read the bytes of the plugin zip in chunks to avoid out of memory errors
-        try (InputStream zis = Files.newInputStream(zip)) {
+        // 步骤 4: 计算下载文件的实际哈希值并验证
+        // read the bytes of the plugin zip in chunks to avoid out of memory errors 分块读取 ZIP 文件，避免大文件导致内存溢出
+        try (InputStream zis = Files.newInputStream(zip)) { // 自动关闭文件流
             try {
+                // 4.1 创建消息摘要对象
                 final MessageDigest digest = MessageDigest.getInstance(digestAlgo);
-                final byte[] bytes = new byte[8192];
+                final byte[] bytes = new byte[8192]; // 8KB 缓冲区（平衡性能与内存）
                 int read;
+                // 4.2 分块读取并更新摘要
                 while ((read = zis.read(bytes)) != -1) {
-                    assert read > 0 : read;
-                    digest.update(bytes, 0, read);
+                    assert read > 0 : read;  // 确保读取到正数字节数
+                    digest.update(bytes, 0, read);  // 将读取的字节添加到摘要计算
                 }
+                // 4.3 转换为十六进制字符串
                 final String actualChecksum = MessageDigests.toHexString(digest.digest());
+                // 4.4 比较预期和实际哈希值
                 if (expectedChecksum.equals(actualChecksum) == false) {
                     throw new UserException(
                         ExitCodes.IO_ERROR,
@@ -643,15 +679,16 @@ class InstallPluginCommand extends EnvironmentAwareCommand {
                 }
             } catch (final NoSuchAlgorithmException e) {
                 // this should never happen as we are using SHA-1 and SHA-512 here
+                // 理论上不会发生，因为只使用 SHA-1 和 SHA-512（JDK 内置支持）
                 throw new AssertionError(e);
             }
         }
-
+        // 步骤 5: 验证 PGP 签名（仅官方插件）
         if (officialPlugin) {
-            verifySignature(zip, urlString);
+            verifySignature(zip, urlString);   // 调用签名验证方法
         }
-
-        return zip;
+        // 步骤 6: 返回已验证的插件文件
+        return zip;  // 返回通过所有验证的 ZIP 文件路径
     }
 
     /**
@@ -734,35 +771,58 @@ class InstallPluginCommand extends EnvironmentAwareCommand {
      * Creates a URL and opens a connection.
      * If the URL returns a 404, {@code null} is returned, otherwise the open URL opject is returned.
      */
-    // pkg private for tests
+    // pkg private for tests 验证 URL 是否存在”，然后返回可用的 URL 对象供后续使用
     URL openUrl(String urlString) throws IOException {
+        // 将urlString转换成URI对象, 并调用其toURL方法将URI对象转换成URL对象
         URL checksumUrl = URI.create(urlString).toURL();
+        // 调用 checksumUrl.openConnection() 方法，尝试建立到该 URL 的网络连接
+        // connection 是一个代表网络连接的对象，可以通过它获取响应头、状态码、输入流等信息
         HttpURLConnection connection = (HttpURLConnection) checksumUrl.openConnection();
         if (connection.getResponseCode() == 404) {
             return null;
         }
+        // 返回获取到的URL对象
         return checksumUrl;
     }
 
+    /**
+     *
+     * @param zip   已下载的插件 ZIP 文件路径（如 /tmp/plugin.zip）
+     * @param pluginsDir    OpenSearch 插件目录路径（如 /opt/opensearch/plugins）
+     * @return
+     * @throws IOException
+     * @throws UserException
+     */
     private Path unzip(Path zip, Path pluginsDir) throws IOException, UserException {
-        // unzip plugin to a staging temp dir
-
-        final Path target = stagingDirectory(pluginsDir);
-        pathsToDeleteOnShutdown.add(target);
-
-        try (ZipFile zipFile = new ZipFile(zip, "UTF8", true, false)) {
-            final Enumeration<? extends ZipArchiveEntry> entries = zipFile.getEntries();
-            ZipArchiveEntry entry;
-            byte[] buffer = new byte[8192];
-            while (entries.hasMoreElements()) {
-                entry = entries.nextElement();
-                if (entry.getName().startsWith("opensearch/")) {
+        // unzip plugin to a staging temp dir 将插件解压到临时暂存目录（而非直接解压到目标位置）
+        // 确保安装要么完全成功，要么完全失败，在移动到最终位置前可以验证插件，失败时只需删除临时目录
+        // 步骤 1：创建临时解压目录
+        final Path target = stagingDirectory(pluginsDir);  // 创建临时解压目录
+        pathsToDeleteOnShutdown.add(target); // 将临时目录添加到关闭时的清理列表
+        // 步骤 2：打开 ZIP 文件
+        try (ZipFile zipFile = new ZipFile(zip,   // 参数 1：ZIP 文件路径
+            "UTF8",                               // 参数 2：字符编码（使用 UTF-8 解析文件名）
+            true,                                 // 参数 3：是否使用 UTF-8 编码（标记）
+            false                                 // 参数 4：是否从 Unicode 注释读取
+        )) {
+            // 步骤3：获取ZIP条目枚举
+            final Enumeration<? extends ZipArchiveEntry> entries = zipFile.getEntries(); //获取zip所有条目
+            ZipArchiveEntry entry; // 声明循环变量，在循环外声明，方便在循环内使用
+            byte[] buffer = new byte[8192]; // 创建缓冲区 创建一个缓存数组，用于存储解压后的数据
+            // 步骤 4：遍历 ZIP 条目
+            while (entries.hasMoreElements()) { // 循环遍历zip条目，检查是否有未处理的ZIP条目
+                entry = entries.nextElement(); // 获取下一个条目 ZipArchiveEntry：表示 ZIP 中的一个文件或目录
+                // 步骤 5：检查旧版插件结构
+                if (entry.getName().startsWith("opensearch/")) { // 检查路径前缀
+                    // 旧版插件会在 ZIP 内包含一个 opensearch/ 目录; 正确结构应该是根目录直接包含插件文件
                     throw new UserException(
                         PLUGIN_MALFORMED,
                         "This plugin was built with an older plugin structure."
                             + " Contact the plugin author to remove the intermediate \"opensearch\" directory within the plugin zip."
                     );
                 }
+                // 步骤 6：计算目标文件路径
+                // resolve()：将相对路径拼接到目标目录; 保持 ZIP 内的目录结构
                 Path targetFile = target.resolve(entry.getName());
 
                 // Using the entry name as a path can result in an entry outside of the plugin dir,
@@ -770,8 +830,9 @@ class InstallPluginCommand extends EnvironmentAwareCommand {
                 // entry like ../whatever. This check attempts to identify both cases by first
                 // normalizing the path (which removes foo/..) and ensuring the normalized entry
                 // is still rooted with the target plugin directory.
+                // 步骤 7：安全检查 - 防止路径遍历攻击
                 if (targetFile.normalize().startsWith(target) == false) {
-                    throw new UserException(
+                    throw new UserException( // 抛出安全异常
                         PLUGIN_MALFORMED,
                         "Zip contains entry name '" + entry.getName() + "' resolving outside of plugin directory"
                     );
@@ -779,20 +840,25 @@ class InstallPluginCommand extends EnvironmentAwareCommand {
 
                 // be on the safe side: do not rely on that directories are always extracted
                 // before their children (although this makes sense, but is it guaranteed?)
-                if (!Files.isSymbolicLink(targetFile.getParent())) {
+                // 步骤 8：创建父目录
+                if (!Files.isSymbolicLink(targetFile.getParent())) { // 符号链接检查
+                    // 递归创建所有不存在的父目录； 如果目录已存在，不抛异常（幂等操作）；自动设置默认权限
                     Files.createDirectories(targetFile.getParent());
                 }
-                if (entry.isDirectory() == false) {
+                // 步骤 9：解压文件内容
+                if (entry.isDirectory() == false) { // 跳过目录
                     // streams will be auto-closed with try-with-resources
                     try (OutputStream out = Files.newOutputStream(targetFile); InputStream input = zipFile.getInputStream(entry)) {
                         input.transferTo(out);
                     }
                 }
             }
+        // 步骤 10：异常处理和清理
         } catch (UserException e) {
             IOUtils.rm(target);
             throw e;
         }
+        // 删除原始 ZIP 文件
         Files.delete(zip);
         return target;
     }
