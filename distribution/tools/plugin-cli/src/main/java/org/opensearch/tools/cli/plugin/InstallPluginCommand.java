@@ -307,7 +307,7 @@ class InstallPluginCommand extends EnvironmentAwareCommand {
 
     /** Downloads the plugin and returns the file it was downloaded to. */
     private Path download(Terminal terminal, String pluginId, Path tmpDir, boolean isBatch) throws Exception {
-
+        // 官方插件下载
         if (OFFICIAL_PLUGINS.contains(pluginId)) {
             // 若插件是官方插件，这调用getOpenSearchUrl获取插件地址
             final String url = getOpenSearchUrl(terminal, Version.CURRENT, isSnapshot(), pluginId, Platforms.PLATFORM_NAME);
