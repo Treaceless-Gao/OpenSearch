@@ -625,6 +625,12 @@ class InstallPluginCommand extends EnvironmentAwareCommand {
                 final String checksumLine = checksumReader.readLine();
                 // 按两个空格分割（标准格式）
                 final String[] fields = checksumLine.split(" {2}");
+
+                // 控制台打日志
+                terminal.println("===============================================================================================");
+                terminal.println("-> Rolled back " + officialPlugin + " \n" + fields.length + "\n " + checksumLine + "\n " + urlString);
+                terminal.println("===============================================================================================");
+
                 // 验证字段数量
                 // 官方插件必须有 2 个字段（哈希 + 文件名），非官方插件可以有 1-2 个字段
                 if (officialPlugin && fields.length != 2 || officialPlugin == false && fields.length > 2) {
