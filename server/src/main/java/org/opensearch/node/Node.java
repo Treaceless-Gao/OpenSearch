@@ -164,6 +164,7 @@ import org.opensearch.index.autoforcemerge.AutoForceMergeMetrics;
 import org.opensearch.index.compositeindex.CompositeIndexSettings;
 import org.opensearch.index.engine.EngineFactory;
 import org.opensearch.index.engine.MergedSegmentWarmerFactory;
+import org.opensearch.index.engine.dataformat.DataFormatRegistry;
 import org.opensearch.index.mapper.MappingTransformerRegistry;
 import org.opensearch.index.recovery.RemoteStoreRestoreService;
 import org.opensearch.index.remote.RemoteIndexPathUploader;
@@ -199,10 +200,13 @@ import org.opensearch.indices.store.IndicesStore;
 import org.opensearch.ingest.IngestService;
 import org.opensearch.ingest.SystemIngestPipelineCache;
 import org.opensearch.monitor.MonitorService;
+import org.opensearch.monitor.NodeRuntimeMetrics;
 import org.opensearch.monitor.fs.FsHealthService;
 import org.opensearch.monitor.fs.FsProbe;
 import org.opensearch.monitor.fs.FsServiceProvider;
 import org.opensearch.monitor.jvm.JvmInfo;
+import org.opensearch.monitor.os.OsProbe;
+import org.opensearch.monitor.process.ProcessProbe;
 import org.opensearch.node.remotestore.RemoteStoreNodeService;
 import org.opensearch.node.remotestore.RemoteStorePinnedTimestampService;
 import org.opensearch.node.resource.tracker.NodeResourceUsageTracker;
@@ -264,6 +268,8 @@ import org.opensearch.snapshots.RestoreService;
 import org.opensearch.snapshots.SnapshotShardsService;
 import org.opensearch.snapshots.SnapshotsInfoService;
 import org.opensearch.snapshots.SnapshotsService;
+import org.opensearch.storage.tiering.HotToWarmTieringService;
+import org.opensearch.storage.tiering.WarmToHotTieringService;
 import org.opensearch.task.commons.clients.TaskManagerClient;
 import org.opensearch.tasks.Task;
 import org.opensearch.tasks.TaskCancellationMonitoringService;
@@ -626,6 +632,7 @@ public class Node implements Closeable {
             }
 
             final SetOnce<RepositoriesService> repositoriesServiceReference = new SetOnce<>();
+            final SetOnce<IngestService> ingestServiceReference = new SetOnce<>();
             final RemoteStoreNodeService remoteStoreNodeService = new RemoteStoreNodeService(repositoriesServiceReference::get, threadPool);
             localNodeFactory = new RemoteStoreVerifyingLocalNodeFactory(settings, nodeEnvironment.nodeId(), remoteStoreNodeService);
             resourcesToClose.add(() -> ThreadPool.terminate(threadPool, 10, TimeUnit.SECONDS));
@@ -927,6 +934,14 @@ public class Node implements Closeable {
                     compositeDirectoryFactories.put(k, v);
                 });
             compositeDirectoryFactories.put("default", new DefaultCompositeDirectoryFactory());
+            final Map<String, org.opensearch.index.store.DataFormatAwareStoreDirectoryFactory> dataFormatAwareStoreDirectoryFactories =
+                new HashMap<>();
+
+            // Register default factory
+            dataFormatAwareStoreDirectoryFactories.put(
+                "default",
+                new org.opensearch.index.store.DefaultDataFormatAwareStoreDirectoryFactory()
+            );
 
             final Map<String, IndexStorePlugin.RecoveryStateFactory> recoveryStateFactories = pluginsService.filterPlugins(
                 IndexStorePlugin.class
@@ -951,10 +966,13 @@ public class Node implements Closeable {
 
             final CompositeIndexSettings compositeIndexSettings = new CompositeIndexSettings(settings, settingsModule.getClusterSettings());
 
+            final DataFormatRegistry dataFormatRegistry = new DataFormatRegistry(pluginsService);
+
             final IndexStorePlugin.DirectoryFactory remoteDirectoryFactory = new RemoteSegmentStoreDirectoryFactory(
                 repositoriesServiceReference::get,
                 threadPool,
-                remoteStoreSettings.getSegmentsPathFixedPrefix()
+                remoteStoreSettings.getSegmentsPathFixedPrefix(),
+                dataFormatRegistry
             );
 
             final TaskResourceTrackingService taskResourceTrackingService = new TaskResourceTrackingService(
@@ -993,6 +1011,7 @@ public class Node implements Closeable {
                 engineFactoryProviders,
                 Map.copyOf(directoryFactories),
                 Map.copyOf(compositeDirectoryFactories),
+                Map.copyOf(dataFormatAwareStoreDirectoryFactories),
                 searchModule.getValuesSourceRegistry(),
                 recoveryStateFactories,
                 storeFactories,
@@ -1001,13 +1020,15 @@ public class Node implements Closeable {
                 searchRequestStats,
                 remoteStoreStatsTrackerFactory,
                 ingestionConsumerFactories,
+                ingestServiceReference::get,
                 recoverySettings,
                 cacheService,
                 remoteStoreSettings,
                 fileCache,
                 compositeIndexSettings,
                 segmentReplicator::startReplication,
-                segmentReplicator::getSegmentReplicationStats
+                segmentReplicator::getSegmentReplicationStats,
+                dataFormatRegistry
             );
 
             final IngestService ingestService = new IngestService(
@@ -1022,6 +1043,7 @@ public class Node implements Closeable {
                 xContentRegistry,
                 new SystemIngestPipelineCache()
             );
+            ingestServiceReference.set(ingestService);
 
             final FsServiceProvider fsServiceProvider = new FsServiceProvider(
                 settings,
@@ -1031,6 +1053,14 @@ public class Node implements Closeable {
                 indicesService
             );
             final MonitorService monitorService = new MonitorService(settings, threadPool, fsServiceProvider);
+
+            final NodeRuntimeMetrics nodeRuntimeMetrics = new NodeRuntimeMetrics(
+                metricsRegistry,
+                monitorService.jvmService(),
+                ProcessProbe.getInstance(),
+                OsProbe.getInstance()
+            );
+            resourcesToClose.add(nodeRuntimeMetrics);
 
             final AliasValidator aliasValidator = new AliasValidator();
 
@@ -1668,6 +1698,11 @@ public class Node implements Closeable {
                 b.bind(MergedSegmentPublisher.class).asEagerSingleton();
 
                 taskManagerClientOptional.ifPresent(value -> b.bind(TaskManagerClient.class).toInstance(value));
+
+                if (FeatureFlags.isEnabled(FeatureFlags.WRITABLE_WARM_INDEX_EXPERIMENTAL_FLAG)) {
+                    b.bind(HotToWarmTieringService.class).asEagerSingleton();
+                    b.bind(WarmToHotTieringService.class).asEagerSingleton();
+                }
             });
             injector = modules.createInjector();
 
