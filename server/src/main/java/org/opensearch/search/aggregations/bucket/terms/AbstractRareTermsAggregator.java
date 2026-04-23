@@ -44,8 +44,8 @@ import org.opensearch.search.aggregations.bucket.nested.NestedAggregator;
 import org.opensearch.search.internal.SearchContext;
 
 import java.io.IOException;
+import java.security.SecureRandom;
 import java.util.Map;
-import java.util.Random;
 
 /**
  * Base class to Aggregate all docs that contain rare terms
@@ -59,7 +59,6 @@ public abstract class AbstractRareTermsAggregator extends DeferableBucketAggrega
     protected final long maxDocCount;
     private final double precision;
     protected final DocValueFormat format;
-    private final int filterSeed;
 
     protected MergingBucketsDeferringCollector deferringCollector;
 
@@ -78,8 +77,6 @@ public abstract class AbstractRareTermsAggregator extends DeferableBucketAggrega
         this.maxDocCount = maxDocCount;
         this.precision = precision;
         this.format = format;
-        // We seed the rng with the ShardID so results are deterministic and don't change randomly
-        this.filterSeed = context.indexShard().shardId().hashCode();
         String scoringAgg = subAggsNeedScore();
         String nestedAgg = descendsFromNestedAggregator(parent);
         if (scoringAgg != null && nestedAgg != null) {
@@ -105,7 +102,9 @@ public abstract class AbstractRareTermsAggregator extends DeferableBucketAggrega
     }
 
     protected SetBackedScalingCuckooFilter newFilter() {
-        SetBackedScalingCuckooFilter filter = new SetBackedScalingCuckooFilter(10000, new Random(filterSeed), precision);
+        // Use SecureRandom to prevent attackers from pre-computing hash collisions
+        // that could trigger worst-case cuckoo filter performance (DoS attack)
+        SetBackedScalingCuckooFilter filter = new SetBackedScalingCuckooFilter(10000, new SecureRandom(), precision);
         filter.registerBreaker(this::addRequestCircuitBreakerBytes);
         return filter;
     }

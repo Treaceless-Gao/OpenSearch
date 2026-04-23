@@ -61,6 +61,7 @@ import java.nio.file.Path;
 import java.nio.file.Paths;
 import java.time.ZoneOffset;
 import java.time.ZonedDateTime;
+import java.security.SecureRandom;
 import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.Iterator;
@@ -68,7 +69,6 @@ import java.util.List;
 import java.util.Locale;
 import java.util.Map;
 import java.util.Optional;
-import java.util.Random;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 import java.util.stream.Stream;
@@ -270,7 +270,8 @@ public class GlobalBuildInfoPlugin implements Plugin<Project> {
         String testSeedProperty = System.getProperty("tests.seed");
         final String testSeed;
         if (testSeedProperty == null) {
-            long seed = new Random(System.currentTimeMillis()).nextLong();
+            // Use SecureRandom to generate unpredictable test seed
+            long seed = new SecureRandom().nextLong();
             testSeed = Long.toUnsignedString(seed, 16).toUpperCase(Locale.ROOT);
         } else {
             testSeed = testSeedProperty;
