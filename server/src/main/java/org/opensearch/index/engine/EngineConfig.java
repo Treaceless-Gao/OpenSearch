@@ -56,22 +56,27 @@ import org.opensearch.index.codec.CodecAliases;
 import org.opensearch.index.codec.CodecService;
 import org.opensearch.index.codec.CodecSettings;
 import org.opensearch.index.engine.dataformat.DataFormatRegistry;
+import org.opensearch.index.engine.exec.DocumentMetadataResolver;
 import org.opensearch.index.engine.exec.commit.CommitterFactory;
 import org.opensearch.index.mapper.DocumentMapperForType;
 import org.opensearch.index.mapper.MapperService;
 import org.opensearch.index.mapper.ParsedDocument;
 import org.opensearch.index.merge.MergedSegmentTransferTracker;
 import org.opensearch.index.seqno.RetentionLeases;
+import org.opensearch.index.store.FormatChecksumStrategy;
 import org.opensearch.index.store.Store;
 import org.opensearch.index.translog.InternalTranslogFactory;
 import org.opensearch.index.translog.TranslogConfig;
 import org.opensearch.index.translog.TranslogDeletionPolicyFactory;
 import org.opensearch.index.translog.TranslogFactory;
 import org.opensearch.indices.IndexingMemoryController;
+import org.opensearch.plugins.DocumentLookupProvider;
 import org.opensearch.threadpool.ThreadPool;
 
+import java.util.Collections;
 import java.util.Comparator;
 import java.util.List;
+import java.util.Map;
 import java.util.Objects;
 import java.util.Set;
 import java.util.function.BooleanSupplier;
@@ -123,6 +128,11 @@ public final class EngineConfig {
     private final DataFormatRegistry dataFormatRegistry;
     private final MapperService mapperService;
     private final CommitterFactory committerFactory;
+    private final Map<String, FormatChecksumStrategy> checksumStrategies;
+    @Nullable
+    private final DocumentLookupProvider documentLookupProvider;
+    @Nullable
+    private final DocumentMetadataResolver documentMetadataResolver;
 
     /**
      * A supplier of the outstanding retention leases. This is used during merged operations to determine which operations that have been
@@ -316,6 +326,9 @@ public final class EngineConfig {
         this.dataFormatRegistry = builder.dataFormatRegistry;
         this.mapperService = builder.mapperService;
         this.committerFactory = builder.committerFactory;
+        this.checksumStrategies = builder.checksumStrategies;
+        this.documentLookupProvider = builder.documentLookupProvider;
+        this.documentMetadataResolver = builder.documentMetadataResolver;
     }
 
     /**
@@ -364,7 +377,9 @@ public final class EngineConfig {
             .documentMapperForTypeSupplier(this.documentMapperForTypeSupplier)
             .indexReaderWarmer(this.indexReaderWarmer)
             .clusterApplierService(this.clusterApplierService)
-            .mergedSegmentTransferTracker(this.mergedSegmentTransferTracker);
+            .mergedSegmentTransferTracker(this.mergedSegmentTransferTracker)
+            .documentLookupProvider(this.documentLookupProvider)
+            .documentMetadataResolver(this.documentMetadataResolver);
     }
 
     /**
@@ -655,6 +670,22 @@ public final class EngineConfig {
         return this.committerFactory;
     }
 
+    public Map<String, FormatChecksumStrategy> getChecksumStrategies() {
+        return this.checksumStrategies;
+    }
+
+    /** Optional {@link DocumentLookupProvider} for the pluggable get-by-id path, or {@code null}. */
+    @Nullable
+    public DocumentLookupProvider getDocumentLookupProvider() {
+        return this.documentLookupProvider;
+    }
+
+    /** Optional {@link DocumentMetadataResolver} passed per-call to the provider, or {@code null}. */
+    @Nullable
+    public DocumentMetadataResolver getDocumentMetadataResolver() {
+        return this.documentMetadataResolver;
+    }
+
     /**
      * Builder for EngineConfig class
      *
@@ -696,6 +727,11 @@ public final class EngineConfig {
         private DataFormatRegistry dataFormatRegistry;
         private MapperService mapperService;
         private CommitterFactory committerFactory;
+        private Map<String, FormatChecksumStrategy> checksumStrategies = Collections.emptyMap();
+        @Nullable
+        private DocumentLookupProvider documentLookupProvider;
+        @Nullable
+        private DocumentMetadataResolver documentMetadataResolver;
 
         public Builder shardId(ShardId shardId) {
             this.shardId = shardId;
@@ -864,6 +900,21 @@ public final class EngineConfig {
 
         public Builder committerFactory(CommitterFactory committerFactory) {
             this.committerFactory = committerFactory;
+            return this;
+        }
+
+        public Builder checksumStrategies(Map<String, FormatChecksumStrategy> checksumStrategies) {
+            this.checksumStrategies = checksumStrategies;
+            return this;
+        }
+
+        public Builder documentLookupProvider(@Nullable DocumentLookupProvider documentLookupProvider) {
+            this.documentLookupProvider = documentLookupProvider;
+            return this;
+        }
+
+        public Builder documentMetadataResolver(@Nullable DocumentMetadataResolver documentMetadataResolver) {
+            this.documentMetadataResolver = documentMetadataResolver;
             return this;
         }
 

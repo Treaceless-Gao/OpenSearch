@@ -8,22 +8,26 @@
 
 package org.opensearch.analytics.planner;
 
+import org.apache.calcite.rex.RexCall;
+import org.apache.calcite.rex.RexLiteral;
+import org.apache.calcite.rex.RexNode;
+import org.opensearch.analytics.spi.DelegatedPredicateSerializer;
+import org.opensearch.analytics.spi.DelegatedSubtreeConvertor;
+import org.opensearch.analytics.spi.FieldReferences;
+import org.opensearch.analytics.spi.FieldStorageInfo;
 import org.opensearch.analytics.spi.FieldType;
 import org.opensearch.analytics.spi.FilterCapability;
-import org.opensearch.analytics.spi.FilterOperator;
-import org.opensearch.index.engine.dataformat.DataFormat;
-import org.opensearch.index.engine.dataformat.FieldTypeCapabilities;
+import org.opensearch.analytics.spi.ScalarFunction;
+import org.opensearch.common.regex.Regex;
 import org.opensearch.index.engine.dataformat.ReaderManagerConfig;
 import org.opensearch.index.engine.exec.EngineReaderManager;
 import org.opensearch.plugins.SearchBackEndPlugin;
 
+import java.util.ArrayList;
 import java.util.HashSet;
 import java.util.List;
+import java.util.Map;
 import java.util.Set;
-
-import static org.opensearch.index.engine.dataformat.FieldTypeCapabilities.Capability.FULL_TEXT_SEARCH;
-import static org.opensearch.index.engine.dataformat.FieldTypeCapabilities.Capability.POINT_RANGE;
-import static org.opensearch.index.engine.dataformat.FieldTypeCapabilities.Capability.STORED_FIELDS;
 
 /**
  * Mock Lucene backend for tests. Supports lucene format with index structures
@@ -39,25 +43,26 @@ public class MockLuceneBackend extends MockBackend implements SearchBackEndPlugi
     public static final String LUCENE_DATA_FORMAT = "lucene";
     private static final Set<String> LUCENE_FORMATS = Set.of(LUCENE_DATA_FORMAT);
 
-    private static final Set<FilterOperator> STANDARD_OPS = Set.of(
-        FilterOperator.EQUALS,
-        FilterOperator.NOT_EQUALS,
-        FilterOperator.GREATER_THAN,
-        FilterOperator.GREATER_THAN_OR_EQUAL,
-        FilterOperator.LESS_THAN,
-        FilterOperator.LESS_THAN_OR_EQUAL,
-        FilterOperator.IS_NULL,
-        FilterOperator.IS_NOT_NULL,
-        FilterOperator.IN,
-        FilterOperator.LIKE
+    private static final Set<ScalarFunction> STANDARD_OPS = Set.of(
+        ScalarFunction.EQUALS,
+        ScalarFunction.NOT_EQUALS,
+        ScalarFunction.GREATER_THAN,
+        ScalarFunction.GREATER_THAN_OR_EQUAL,
+        ScalarFunction.LESS_THAN,
+        ScalarFunction.LESS_THAN_OR_EQUAL,
+        ScalarFunction.IS_NULL,
+        ScalarFunction.IS_NOT_NULL,
+        ScalarFunction.IN,
+        ScalarFunction.LIKE
     );
 
-    private static final Set<FilterOperator> FULL_TEXT_OPS = Set.of(
-        FilterOperator.MATCH,
-        FilterOperator.MATCH_PHRASE,
-        FilterOperator.FUZZY,
-        FilterOperator.WILDCARD,
-        FilterOperator.REGEXP
+    private static final Set<ScalarFunction> FULL_TEXT_OPS = Set.of(
+        ScalarFunction.MATCH,
+        ScalarFunction.MATCH_PHRASE,
+        ScalarFunction.FUZZY,
+        ScalarFunction.WILDCARD,
+        ScalarFunction.REGEXP,
+        ScalarFunction.QUERY_STRING
     );
 
     private static final Set<FieldType> STANDARD_TYPES = new HashSet<>();
@@ -78,12 +83,10 @@ public class MockLuceneBackend extends MockBackend implements SearchBackEndPlugi
     private static final Set<FilterCapability> FILTER_CAPS;
     static {
         Set<FilterCapability> caps = new HashSet<>();
-        for (FilterOperator op : STANDARD_OPS) {
-            for (FieldType type : STANDARD_TYPES) {
-                caps.add(new FilterCapability.Standard(op, type, LUCENE_FORMATS));
-            }
+        for (ScalarFunction op : STANDARD_OPS) {
+            caps.add(new FilterCapability.Standard(op, STANDARD_TYPES, LUCENE_FORMATS));
         }
-        for (FilterOperator op : FULL_TEXT_OPS) {
+        for (ScalarFunction op : FULL_TEXT_OPS) {
             for (FieldType type : FULL_TEXT_TYPES) {
                 caps.add(new FilterCapability.FullText(op, type, LUCENE_FORMATS, Set.of()));
             }
@@ -101,37 +104,119 @@ public class MockLuceneBackend extends MockBackend implements SearchBackEndPlugi
         return FILTER_CAPS;
     }
 
+    /**
+     * Default delegated-predicate serializers for the multi-field full-text functions. Their
+     * {@code referencedFields} mirrors the planner's pre-extractor behavior: literals come from the
+     * {@code fields} MAP, fan-out when empty, non-lenient. {@code serialize} is unused in planner
+     * tests. Tests needing in-string fields or explicit lenient override this.
+     */
+    @Override
+    public Map<ScalarFunction, DelegatedPredicateSerializer> delegatedPredicateSerializers() {
+        DelegatedPredicateSerializer mapLiteralSerializer = new DelegatedPredicateSerializer() {
+            @Override
+            public byte[] serialize(RexCall call, List<FieldStorageInfo> fieldStorage) {
+                throw new UnsupportedOperationException("Mock backend does not serialize predicates");
+            }
+
+            @Override
+            public FieldReferences referencedFields(RexCall call, List<FieldStorageInfo> fieldStorage) {
+                List<String> literals = new ArrayList<>();
+                List<String> patterns = new ArrayList<>();
+                for (String token : extractLiteralFieldNames(call)) {
+                    if (Regex.isSimpleMatchPattern(token)) {
+                        patterns.add(token);
+                    } else {
+                        literals.add(token);
+                    }
+                }
+                return new FieldReferences(literals, patterns, false);
+            }
+        };
+        return Map.of(
+            ScalarFunction.QUERY_STRING,
+            mapLiteralSerializer,
+            ScalarFunction.SIMPLE_QUERY_STRING,
+            mapLiteralSerializer,
+            ScalarFunction.MULTI_MATCH,
+            mapLiteralSerializer
+        );
+    }
+
+    /**
+     * Extracts literal field names from the {@code fields}/{@code field} MAP operand of a
+     * multi-field full-text {@code RexCall} — the field-name encoding the SQL plugin emits. Mirrors
+     * the planner's pre-extractor behavior so existing full-text tests keep their semantics.
+     */
+    private static List<String> extractLiteralFieldNames(RexCall predicate) {
+        List<String> names = new ArrayList<>();
+        for (RexNode operand : predicate.getOperands()) {
+            if (operand instanceof RexCall outerMap && outerMap.getOperands().size() >= 2) {
+                RexNode keyNode = outerMap.getOperands().get(0);
+                if (!(keyNode instanceof RexLiteral keyLit)) continue;
+                String key = keyLit.getValueAs(String.class);
+                if (!"fields".equals(key) && !"field".equals(key)) continue;
+
+                RexNode valueNode = outerMap.getOperands().get(1);
+                if (valueNode instanceof RexCall nestedMap) {
+                    List<RexNode> nestedOperands = nestedMap.getOperands();
+                    for (int i = 0; i + 1 < nestedOperands.size(); i += 2) {
+                        if (nestedOperands.get(i) instanceof RexLiteral fieldLit) {
+                            String fieldName = fieldLit.getValueAs(String.class);
+                            if (fieldName != null && !fieldName.isEmpty()) {
+                                names.add(fieldName);
+                            }
+                        }
+                    }
+                } else if (valueNode instanceof RexLiteral valueLit) {
+                    String fieldName = valueLit.getValueAs(String.class);
+                    if (fieldName != null && !fieldName.isEmpty()) {
+                        names.add(fieldName);
+                    }
+                }
+            }
+        }
+        return names;
+    }
+
     // ---- SearchBackEndPlugin (storage) ----
 
     @Override
-    public List<DataFormat> getSupportedFormats() {
-        return List.of(new DataFormat() {
-            @Override
-            public String name() {
-                return LUCENE_DATA_FORMAT;
-            }
-
-            @Override
-            public long priority() {
-                return 0;
-            }
-
-            @Override
-            public Set<FieldTypeCapabilities> supportedFields() {
-                return Set.of(
-                    new FieldTypeCapabilities("integer", Set.of(POINT_RANGE, STORED_FIELDS)),
-                    new FieldTypeCapabilities("long", Set.of(POINT_RANGE, STORED_FIELDS)),
-                    new FieldTypeCapabilities("keyword", Set.of(FULL_TEXT_SEARCH, STORED_FIELDS)),
-                    new FieldTypeCapabilities("text", Set.of(FULL_TEXT_SEARCH, STORED_FIELDS)),
-                    new FieldTypeCapabilities("boolean", Set.of(STORED_FIELDS)),
-                    new FieldTypeCapabilities("date", Set.of(POINT_RANGE, STORED_FIELDS))
-                );
-            }
-        });
+    public List<String> getSupportedFormats() {
+        return List.of(LUCENE_DATA_FORMAT);
     }
 
     @Override
     public EngineReaderManager<Object> createReaderManager(ReaderManagerConfig settings) {
         return null;
+    }
+
+    @Override
+    public DelegatedSubtreeConvertor getDelegatedSubtreeConvertor() {
+        return (subtree, fieldStorage) -> {
+            // Simple test convertor: walks the subtree and produces a descriptive string
+            return describeSubtree(subtree).getBytes(java.nio.charset.StandardCharsets.UTF_8);
+        };
+    }
+
+    private static String describeSubtree(org.apache.calcite.rex.RexNode node) {
+        if (node instanceof org.opensearch.analytics.planner.rel.AnnotatedPredicate ap) {
+            node = ap.unwrap();
+        }
+        if (node instanceof org.apache.calcite.rex.RexCall call) {
+            switch (call.getKind()) {
+                case AND:
+                case OR:
+                case NOT: {
+                    java.util.List<String> children = new java.util.ArrayList<>();
+                    for (org.apache.calcite.rex.RexNode child : call.getOperands()) {
+                        children.add(describeSubtree(child));
+                    }
+                    return call.getKind() + "(" + String.join(",", children) + ")";
+                }
+                default:
+                    return call.getOperator().getName();
+            }
+        }
+        return node.toString();
     }
 }
